@@ -1,0 +1,116 @@
+<meta charset="utf-8" />
+<title>dev-orchestrator</title>
+<style>
+  :root { color-scheme: light dark; --fg:#111; --muted:#666; --bg:#fff; --card:#f6f6f7; --line:#e2e2e5; --accent:#3b5bdb; }
+  @media (prefers-color-scheme: dark){ :root{ --fg:#e8e8ea; --muted:#9a9aa2; --bg:#111214; --card:#1c1d21; --line:#2c2d33; --accent:#748ffc; } }
+  * { box-sizing:border-box; }
+  body { font:14px/1.5 -apple-system,system-ui,sans-serif; margin:0; color:var(--fg); background:var(--bg); }
+  header { padding:16px 24px; border-bottom:1px solid var(--line); display:flex; gap:12px; align-items:center; }
+  h1 { font-size:16px; margin:0; }
+  .pill { font-size:11px; padding:2px 8px; border-radius:999px; background:var(--card); color:var(--muted); }
+  .pill.dry { background:#f59f0022; color:#b7791f; }
+  main { padding:24px; display:grid; grid-template-columns:1fr 1fr; gap:24px; max-width:1200px; }
+  @media (max-width:860px){ main{ grid-template-columns:1fr; } }
+  section h2 { font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); margin:0 0 12px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:10px; }
+  .row { display:flex; justify-content:space-between; gap:8px; align-items:flex-start; }
+  .key { font-weight:600; }
+  .meta { color:var(--muted); font-size:12px; margin-top:2px; }
+  .state { font-size:11px; padding:1px 7px; border-radius:6px; background:var(--bg); border:1px solid var(--line); }
+  button { font:inherit; border:1px solid var(--line); background:var(--bg); color:var(--fg); border-radius:7px; padding:4px 10px; cursor:pointer; }
+  button:hover { border-color:var(--accent); color:var(--accent); }
+  .actions { display:flex; gap:6px; margin-top:10px; }
+  .status-running{ color:var(--accent);} .status-passed,.status-dry_run{ color:#2f9e44;} .status-needs_fixes{ color:#e8590c;} .status-failed{ color:#e03131;} .status-human_review{ color:#ae3ec9;}
+  pre { background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:8px; overflow-x:auto; font-size:12px; max-height:200px; }
+  .empty { color:var(--muted); font-style:italic; }
+  a { color:var(--accent); }
+</style>
+
+<header>
+  <h1>dev-orchestrator</h1>
+  <span id="mode" class="pill">…</span>
+  <span id="ws" class="pill"></span>
+  <span style="flex:1"></span>
+  <button onclick="refresh()">↻ Refresh</button>
+</header>
+
+<main>
+  <section>
+    <h2>Linear work</h2>
+    <div id="work"><p class="empty">Loading…</p></div>
+  </section>
+  <section>
+    <h2>Runs</h2>
+    <div id="runs"><p class="empty">No runs yet.</p></div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+async function post(path, body){
+  const r = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  return r.json();
+}
+
+function issueCard(i){
+  const prId = i.pr_url ? (i.pr_url.match(/pull-requests\/(\d+)/)||[])[1] : '';
+  const canRun = i.state_name === 'Ready for AI';
+  const canReview = i.state_name === 'PR Open' || i.state_name === 'AI Review';
+  const canFix = i.state_name === 'Needs Fixes';
+  return `<div class="card">
+    <div class="row"><span class="key">${i.identifier} — ${escapeHtml(i.title)}</span>
+      <span class="state">${i.state_name||'—'}</span></div>
+    <div class="meta">size:${i.size||'—'} · risk:${i.risk||'—'} · repo:${i.repo||'—'}${i.pr_url?` · <a href="${i.pr_url}" target="_blank">PR</a>`:''}</div>
+    <div class="actions">
+      ${canRun?`<button onclick="dispatch('issue','${i.identifier}')">Run</button>`:''}
+      ${canReview?`<button onclick="dispatch('review','${i.identifier}',${prId||'null'})">Review</button>`:''}
+      ${canFix?`<button onclick="dispatch('fix','${i.identifier}',${prId||'null'})">Fix</button>`:''}
+    </div>
+  </div>`;
+}
+
+function runCard(r){
+  return `<div class="card" onclick="showLog('${r.id}')" style="cursor:pointer">
+    <div class="row"><span class="key">${r.kind} · ${r.issue_key}</span>
+      <span class="status-${r.status}">${r.status}</span></div>
+    <div class="meta">${r.agent||''}${r.pr_url?` · <a href="${r.pr_url}" target="_blank">PR</a>`:''} · <code>${r.id}</code></div>
+    <pre id="log-${r.id}" style="display:none">…</pre>
+  </div>`;
+}
+
+function escapeHtml(s){ return (s||'').replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
+async function refresh(){
+  const h = await (await fetch('/health')).json();
+  $('mode').textContent = h.dry_run ? 'DRY_RUN' : 'LIVE';
+  $('mode').className = 'pill' + (h.dry_run ? ' dry' : '');
+  $('ws').textContent = h.workspace ? ('workspace: '+h.workspace) : 'no workspace';
+
+  const w = await (await fetch('/api/work')).json();
+  $('work').innerHTML = (w.issues && w.issues.length)
+    ? w.issues.map(issueCard).join('')
+    : `<p class="empty">${w.note || 'No actionable issues.'}</p>`;
+
+  const rr = await (await fetch('/api/runs')).json();
+  $('runs').innerHTML = (rr.runs && rr.runs.length) ? rr.runs.slice().reverse().map(runCard).join('') : '<p class="empty">No runs yet.</p>';
+}
+
+async function dispatch(kind, issueKey, prId){
+  const body = kind==='issue' ? {issue_key:issueKey} : {issue_key:issueKey, pr_id:prId};
+  const res = await post('/api/dispatch/'+kind, body);
+  await refresh();
+  if(res.run_id) showLog(res.run_id);
+}
+
+async function showLog(id){
+  const el = $('log-'+id);
+  if(!el) return;
+  const r = await (await fetch('/api/runs/'+id)).json();
+  el.style.display = 'block';
+  el.textContent = (r.log||[]).map(e=>`${e.phase}: ${e.message}`).join('\n') || '(no events)';
+}
+
+refresh();
+setInterval(refresh, 4000);
+</script>
