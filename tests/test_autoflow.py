@@ -62,7 +62,7 @@ class _NoMetaBB:
 
 
 def _live_orch(tmp_path, bb, **settings):
-    s = Settings(dry_run=False, runs_dir=str(tmp_path / "runs"), target_repo_path=str(tmp_path),
+    s = Settings(_env_file=None, dry_run=False, runs_dir=str(tmp_path / "runs"), target_repo_path=str(tmp_path),
                  model_complex_implementation="opus-4.8", model_simple_implementation="codex-5.4",
                  model_review="codex-5.5", **settings)
     runs = RunRegistry(s.runs_dir, clock=lambda: "T")

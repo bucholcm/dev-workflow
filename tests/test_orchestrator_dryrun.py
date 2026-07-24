@@ -20,7 +20,7 @@ class _RecordingLinear:
 
 
 def _orch(tmp_path):
-    s = Settings(dry_run=True, runs_dir=str(tmp_path / "runs"),
+    s = Settings(_env_file=None, dry_run=True, runs_dir=str(tmp_path / "runs"),
                  model_simple_implementation="codex-5.4", model_complex_implementation="opus-4.8",
                  model_review="codex-5.5")
     runs = RunRegistry(s.runs_dir, clock=lambda: "T")

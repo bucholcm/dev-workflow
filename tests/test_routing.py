@@ -4,7 +4,7 @@ from dev_orchestrator.routing import branch_name, route, slugify
 
 
 def _settings():
-    return Settings(
+    return Settings(_env_file=None,
         model_simple_implementation="codex-5.4",
         model_complex_implementation="opus-4.8",
         model_review="codex-5.5",
