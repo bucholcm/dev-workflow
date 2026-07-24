@@ -98,6 +98,11 @@ class Settings(BaseSettings):
     def claude_projects_path(self) -> str:
         return self.claude_projects_dir or str(Path.home() / ".claude" / "projects")
 
+    @property
+    def session_index_path(self) -> str:
+        """Durable issue→session index; lives beside runs but survives clearing runs/*.jsonl."""
+        return str(Path(self.runs_dir) / "session_index.json")
+
     def resolve_bitbucket(self) -> Settings:
         """Fill missing Bitbucket creds from bin/bb's on-disk sources."""
         if not (self.bitbucket_username and self.bitbucket_token):

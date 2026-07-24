@@ -11,7 +11,7 @@ import logging
 import threading
 import uuid
 
-from . import gitops, prompts, runner
+from . import gitops, prompts, runner, session_index
 from .config import Settings
 from .escalation_parser import parse_escalation
 from .models import Decision, LinearIssue, ReviewResult, Severity, WorkflowState
@@ -58,10 +58,17 @@ class Orchestrator:
         sess_id = meta.ai_session_id if meta else ""
         sess_cli = meta.ai_cli if meta else ""
         if issue and (not author or not sess_id):
-            prior = self.runs.latest_session_for_issue(issue.identifier)
+            # Durable index first (survives clearing the runs log), then live run history.
+            entry = session_index.get(self.s.session_index_path, issue.identifier)
+            if entry:
+                author, sess_id, sess_cli = (author or entry.get("agent", ""),
+                                             sess_id or entry.get("session_id", ""),
+                                             sess_cli or entry.get("cli", ""))
+                self.runs.event(run_id, "fix", "recovered author/session from the session index")
+            prior = self.runs.latest_session_for_issue(issue.identifier) if not sess_id else None
             if prior:
                 author, sess_id, sess_cli = author or prior.agent, sess_id or prior.session_id, sess_cli or prior.cli
-                self.runs.event(run_id, "fix", f"recovered author/session from run {prior.id} (no PR meta-block)")
+                self.runs.event(run_id, "fix", f"recovered author/session from run {prior.id}")
         return author, sess_id, sess_cli
 
     # ── auto-flow: route review findings back to the implementing agent ──
@@ -164,6 +171,8 @@ class Orchestrator:
             cli = runner.resolve_cli(self._cli_family(decision.agent), allow_claude_fallback=fallback)
             # Only a claude run can carry the pinned session; a codex fallback runs unpinned.
             run_session = session_id if cli == "claude" else ""
+            if run_session:  # durable issue→session link, independent of the runs log
+                session_index.record(self.s.session_index_path, issue.identifier, run_session, cli, decision.agent)
             wt = gitops.prepare_worktree(self.s.target_repo_path, decision.branch)
             is_complex = decision.agent == self.s.model_complex_implementation
             prompt = prompts.build_implement_prompt(issue, is_complex=is_complex)

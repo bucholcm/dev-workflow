@@ -17,6 +17,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from . import session_index
 from . import sessions as session_radar
 from .bitbucket_client import BitbucketClient
 from .config import get_settings
@@ -88,6 +89,10 @@ def create_app() -> FastAPI:
     _hydrated = runs.hydrate()  # restore prior runs (+ pinned session ids) across restarts
     if _hydrated:
         logger.info("hydrated %d prior runs from %s", _hydrated, s.runs_dir)
+    # Backfill the durable session index from any hydrated runs (keeps it fresh from history).
+    for _r in runs.list():
+        if _r.session_id and _r.issue_key and not _r.issue_key.startswith("PR-"):
+            session_index.record(s.session_index_path, _r.issue_key, _r.session_id, _r.cli, _r.agent)
     _dismiss_path = str(Path(s.runs_dir) / "dismissed_sessions.json")
 
     linear = LinearClient(s.linear_api_key, s.linear_team_id) if s.linear_api_key else None
@@ -243,8 +248,10 @@ def create_app() -> FastAPI:
         # issue, so that mapping is authoritative — use it over the branch heuristic.
         all_runs = runs.list()
         q_by_sid = {r.session_id: r.questions for r in all_runs if r.session_id and r.questions}
-        key_by_sid = {r.session_id: r.issue_key for r in all_runs
-                      if r.session_id and r.issue_key and not r.issue_key.startswith("PR-")}
+        # Durable index first, then live run history — either can supply the ticket link.
+        key_by_sid = session_index.by_session(s.session_index_path)
+        key_by_sid.update({r.session_id: r.issue_key for r in all_runs
+                           if r.session_id and r.issue_key and not r.issue_key.startswith("PR-")})
         dismissed = session_radar.load_dismissed(_dismiss_path)
         out = []
         for si in found:

@@ -1,0 +1,25 @@
+{"event": "start", "kind": "review", "issue": "PR-66", "agent": "codex-5.5", "session_id": "", "cli": ""}
+{"event": "log", "ts": "2026-07-24T08:34:16+00:00", "phase": "review", "message": "running codex (codex-5.5)"}
+{"event": "log", "ts": "2026-07-24T08:34:16+00:00", "phase": "spawn", "message": "codex (read-only) in /Users/mbucholc/Documents/dev/python/bridge-ai-poc/.dev-orchestrator-worktrees/docs-core-instance-split-m1"}
+{"event": "log", "ts": "2026-07-24T08:38:28+00:00", "phase": "stderr", "message": "      \"line\": 67,"}
+{"event": "log", "ts": "2026-07-24T08:38:28+00:00", "phase": "stderr", "message": "      \"end_line\": 68,"}
+{"event": "log", "ts": "2026-07-24T08:38:28+00:00", "phase": "stderr", "message": "      \"issue\": \"The document states that get_kms_client() selects DevKmsClient, but that function no longer exists.\","}
+{"event": "log", "ts": "2026-07-24T08:38:28+00:00", "phase": "stderr", "message": "      \"fix\": \"Describe the instance profile as the selector for the test crypto provider.\""}
+{"event": "log", "ts": "2026-07-24T08:38:28+00:00", "phase": "stderr", "message": "    }"}
+{"event": "log", "ts": "2026-07-24T08:38:28+00:00", "phase": "stderr", "message": "  ],"}
+{"event": "log", "ts": "2026-07-24T08:38:28+00:00", "phase": "stderr", "message": "  \"acceptance_criteria\": ["}
+{"event": "log", "ts": "2026-07-24T08:38:28+00:00", "phase": "stderr", "message": "    \"[x] Core exposes create_app(profile) without a module-level FastAPI app.\","}
+{"event": "log", "ts": "2026-07-24T08:38:28+00:00", "phase": "stderr", "message": "    \"[x] Craftware deployment literals and the crypto-provider choice are moved to instance/.\","}
+{"event": "log", "ts": "2026-07-24T08:38:28+00:00", "phase": "stderr", "message": "    \"[x] Runtime and CI entrypoints target craftware_instance.app:app.\","}
+{"event": "log", "ts": "2026-07-24T08:38:28+00:00", "phase": "stderr", "message": "    \"[ ] All callers were migrated from the removed get_kms_client() API.\","}
+{"event": "log", "ts": "2026-07-24T08:38:28+00:00", "phase": "stderr", "message": "    \"[ ] Full validation gate is green: the local suite could not complete in the read-only sandbox (699 passed, 2 failed and 62 errored due to unavailable temp files/Temporal server).\""}
+{"event": "log", "ts": "2026-07-24T08:38:28+00:00", "phase": "stderr", "message": "  ],"}
+{"event": "log", "ts": "2026-07-24T08:38:28+00:00", "phase": "stderr", "message": "  \"tests_passed\": false,"}
+{"event": "log", "ts": "2026-07-24T08:38:28+00:00", "phase": "stderr", "message": "  \"summary\": \"The new composition seam constructs successfully, but two shipped operational Salesforce helpers are broken by the KMS API removal. Human review is additionally required because this changes encryption-provider selection for user OAuth refresh tokens.\","}
+{"event": "log", "ts": "2026-07-24T08:38:28+00:00", "phase": "stderr", "message": "  \"decision\": \"require_human_review\""}
+{"event": "log", "ts": "2026-07-24T08:38:28+00:00", "phase": "stderr", "message": "}"}
+{"event": "log", "ts": "2026-07-24T08:38:28+00:00", "phase": "stderr", "message": "```"}
+{"event": "log", "ts": "2026-07-24T08:38:28+00:00", "phase": "stderr", "message": "tokens used"}
+{"event": "log", "ts": "2026-07-24T08:38:28+00:00", "phase": "stderr", "message": "102,083"}
+{"event": "log", "ts": "2026-07-24T08:38:29+00:00", "phase": "review", "message": "decision=require_human_review"}
+{"event": "finish", "status": "human_review", "pr_url": ""}

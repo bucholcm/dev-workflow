@@ -1,0 +1,3 @@
+{"event": "start", "kind": "resume", "issue": "BRI-59", "agent": "codex-5.4", "session_id": "", "cli": "codex"}
+{"event": "log", "ts": "2026-07-23T20:59:11+00:00", "phase": "resume", "message": "no resumable Claude session for this issue (codex or unpinned)"}
+{"event": "finish", "status": "failed", "pr_url": ""}

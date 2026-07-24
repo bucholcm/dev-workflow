@@ -6,6 +6,7 @@ __pycache__/
 .env
 runs/*.jsonl
 runs/dismissed_sessions.json
+runs/session_index.json
 .dev-orchestrator-worktrees/
 .DS_Store
 *.egg-info/

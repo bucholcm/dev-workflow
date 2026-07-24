@@ -1,0 +1,5 @@
+{"event": "start", "kind": "review", "issue": "BRI-61", "agent": "codex-5.5", "session_id": "", "cli": ""}
+{"event": "log", "ts": "2026-07-24T08:31:21+00:00", "phase": "review", "message": "running codex (codex-5.5)"}
+{"event": "log", "ts": "2026-07-24T08:31:21+00:00", "phase": "spawn", "message": "codex (read-only) in /Users/mbucholc/Documents/dev/python/bridge-ai-poc/.dev-orchestrator-worktrees/docs-core-instance-split-m1"}
+{"event": "log", "ts": "2026-07-24T08:31:21+00:00", "phase": "linear", "message": "set BRI-61 \u2192 Human Review"}
+{"event": "finish", "status": "failed", "pr_url": ""}

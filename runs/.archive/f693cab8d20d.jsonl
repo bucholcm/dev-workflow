@@ -1,0 +1,6 @@
+{"event": "start", "kind": "implement", "issue": "BRI-61", "agent": "opus-4.8", "session_id": "193c5268-7255-41c2-b2d2-35971ca6bd69", "cli": "claude"}
+{"event": "log", "ts": "2026-07-23T21:12:43+00:00", "phase": "route", "message": "size=l \u2192 complex implementation (opus-4.8)"}
+{"event": "log", "ts": "2026-07-23T21:12:43+00:00", "phase": "linear", "message": "[dry-run] would set BRI-61 \u2192 AI In Progress"}
+{"event": "log", "ts": "2026-07-23T21:12:43+00:00", "phase": "implement", "message": "[dry-run] would run opus-4.8 on branch ai/BRI-61-m1-carve-craftware-instance-create-app-p (session 193c5268\u2026)"}
+{"event": "log", "ts": "2026-07-23T21:12:43+00:00", "phase": "pr", "message": "[dry-run] would create PR with meta-block"}
+{"event": "finish", "status": "dry_run", "pr_url": ""}
