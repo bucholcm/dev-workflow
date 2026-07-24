@@ -40,8 +40,34 @@ def prepare_worktree(repo_path: str, branch: str, base_branch: str = "main") -> 
 
 
 def worktree_for(repo_path: str, branch: str) -> str:
-    """Path of an existing worktree for `branch` (for review/fix on an open PR)."""
+    """Path of the worktree for `branch` (may not exist yet — see ensure_worktree_for_branch)."""
     return str(Path(repo_path) / WORKTREE_DIR / branch.replace("/", "-"))
+
+
+def ensure_worktree_for_branch(repo_path: str, branch: str) -> str:
+    """Worktree checked out on an EXISTING (remote) `branch`, creating it if absent.
+
+    Used by review/fix on an open PR whose branch the orchestrator did not create
+    itself (e.g. a human- or agent-opened PR surfaced by the review queue). Unlike
+    `prepare_worktree`, this checks out the PR's actual branch content rather than
+    branching fresh off base.
+    """
+    wt = Path(repo_path) / WORKTREE_DIR / branch.replace("/", "-")
+    wt.parent.mkdir(parents=True, exist_ok=True)
+    if wt.exists():
+        return str(wt)
+
+    _run(["git", "fetch", "origin", branch], repo_path)
+    # Prefer an existing local branch; else create a tracking branch; else detached.
+    res = _run(["git", "worktree", "add", str(wt), branch], repo_path)
+    if res.returncode != 0:
+        res = _run(["git", "worktree", "add", "--track", "-b", branch, str(wt), f"origin/{branch}"], repo_path)
+    if res.returncode != 0:
+        res = _run(["git", "worktree", "add", "--detach", str(wt), f"origin/{branch}"], repo_path)
+    if res.returncode != 0:
+        raise RuntimeError(f"could not create worktree for {branch}: {res.stderr.strip()}")
+    logger.info("Prepared review/fix worktree %s on %s", wt, branch)
+    return str(wt)
 
 
 def push_branch(worktree_path: str, branch: str) -> None:

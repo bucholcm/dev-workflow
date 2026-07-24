@@ -187,7 +187,7 @@ class Orchestrator:
         try:
             bb = self._make_bb(repo_slug)
             pr = bb.get_pr(pr_id)
-            wt = gitops.worktree_for(self.s.target_repo_path, pr.source_branch)
+            wt = gitops.ensure_worktree_for_branch(self.s.target_repo_path, pr.source_branch)
             cli = runner.resolve_cli(self.s.cli_for_review, allow_claude_fallback=self.s.codex_fallback_to_claude)
             prompt = prompts.build_review_prompt(issue, pr.title)
             self.runs.event(run_id, "review", f"running {cli} ({self.s.model_review})")
@@ -249,7 +249,7 @@ class Orchestrator:
                 return run_id
 
             unresolved = self._summarize_unresolved(bb, pr_id)
-            wt = gitops.worktree_for(self.s.target_repo_path, pr.source_branch)
+            wt = gitops.ensure_worktree_for_branch(self.s.target_repo_path, pr.source_branch)
             fallback = self.s.codex_fallback_to_claude
             cli = runner.resolve_cli(self._cli_family(meta.ai_author), allow_claude_fallback=fallback)
             # Resume the ORIGINAL session so the fix keeps full authoring context
