@@ -4,7 +4,7 @@ import json
 import os
 
 from dev_orchestrator.models import Attention
-from dev_orchestrator.sessions import scan_sessions
+from dev_orchestrator.sessions import dismiss, is_dismissed, load_dismissed, scan_sessions
 
 NOW = 1_000_000.0
 
@@ -81,3 +81,16 @@ def test_attention_sorted_first_and_app_managed_flag(tmp_path):
 
 def test_missing_projects_dir_is_empty(tmp_path):
     assert _scan(tmp_path / "does-not-exist") == []
+
+
+def test_dismiss_hides_until_new_activity(tmp_path):
+    path = str(tmp_path / "dismissed.json")
+    assert load_dismissed(path) == {}
+    dismiss(path, "sid-1", "2026-07-23T08:45:03")
+    # dismissed while no newer activity → hidden
+    assert is_dismissed(load_dismissed(path), "sid-1", "2026-07-23T08:45:03") is True
+    assert is_dismissed(load_dismissed(path), "sid-1", "2026-07-23T07:00:00") is True
+    # a NEWER last_active than the dismiss point → re-surfaces
+    assert is_dismissed(load_dismissed(path), "sid-1", "2026-07-24T09:00:00") is False
+    # a different session is unaffected
+    assert is_dismissed(load_dismissed(path), "sid-2", "2026-07-23T08:45:03") is False

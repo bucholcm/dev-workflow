@@ -130,6 +130,7 @@ function attentionCard(s){
     <div class="actions">
       <button onclick="answerResume('${s.session_id}', ${JSON.stringify(s.cwd||'')})">Answer &amp; resume</button>
       <button onclick="copyResume('${s.session_id}')">Copy resume cmd</button>
+      <button onclick="dismissSession('${s.session_id}', ${JSON.stringify(s.last_active||'')})" title="I'm not answering this">Dismiss</button>
     </div>
   </div>`;
 }
@@ -178,7 +179,7 @@ async function refresh(){
 
   const ss = await (await fetch('/api/sessions')).json();
   const list = ss.sessions || [];
-  const att = list.filter(s => s.attention === 'waiting_input' || s.attention === 'waiting_approval');
+  const att = list.filter(s => (s.attention === 'waiting_input' || s.attention === 'waiting_approval') && !s.dismissed);
   $('attention-wrap').style.display = att.length ? 'block' : 'none';
   $('attention').innerHTML = att.map(attentionCard).join('');
   $('sessions').innerHTML = list.length ? list.map(sessionCard).join('') : '<p class="empty">No Claude sessions found.</p>';
@@ -209,6 +210,11 @@ async function answerResume(sessionId, cwd){
 async function copyResume(sessionId){
   const cmd = 'claude --resume '+sessionId;
   try { await navigator.clipboard.writeText(cmd); } catch(e){}
+}
+
+async function dismissSession(sessionId, lastActive){
+  await post('/api/sessions/dismiss', {session_id:sessionId, last_active:lastActive});
+  await refresh();
 }
 
 async function showLog(id){

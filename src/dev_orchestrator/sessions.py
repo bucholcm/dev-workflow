@@ -220,3 +220,33 @@ def scan_sessions(
 
 def needs_attention(sessions: list[SessionInfo]) -> list[SessionInfo]:
     return [s for s in sessions if s.attention in (Attention.WAITING_APPROVAL, Attention.WAITING_INPUT)]
+
+
+# ── Dismiss store (a session the human has decided not to answer) ────────────
+# Persisted as {session_id: last_active_at_dismiss}. A dismissed session that
+# later gets NEW activity (a newer last_active) re-surfaces automatically.
+
+def load_dismissed(path: str) -> dict[str, str]:
+    p = Path(path)
+    if not p.is_file():
+        return {}
+    try:
+        data = json.loads(p.read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def dismiss(path: str, session_id: str, last_active: str) -> dict[str, str]:
+    d = load_dismissed(path)
+    d[session_id] = last_active or ""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(d))
+    return d
+
+
+def is_dismissed(dismissed: dict[str, str], session_id: str, last_active: str) -> bool:
+    """True when dismissed and there has been no newer activity since the dismiss."""
+    ts = dismissed.get(session_id)
+    return ts is not None and (last_active or "") <= ts

@@ -5,6 +5,7 @@ __pycache__/
 .ruff_cache/
 .env
 runs/*.jsonl
+runs/dismissed_sessions.json
 .dev-orchestrator-worktrees/
 .DS_Store
 *.egg-info/

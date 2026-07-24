@@ -74,12 +74,18 @@ class SessionResume(BaseModel):
     cwd: str | None = None
 
 
+class SessionDismiss(BaseModel):
+    session_id: str
+    last_active: str | None = None
+
+
 def create_app() -> FastAPI:
     s = get_settings()
     logging.basicConfig(level=getattr(logging, s.log_level.upper(), logging.INFO))
     app = FastAPI(title="dev-orchestrator", version="0.1.0")
 
     runs = RunRegistry(s.runs_dir, clock=_now_iso)
+    _dismiss_path = str(Path(s.runs_dir) / "dismissed_sessions.json")
 
     linear = LinearClient(s.linear_api_key, s.linear_team_id) if s.linear_api_key else None
     state_ids: dict[str, str] = {}
@@ -210,13 +216,20 @@ def create_app() -> FastAPI:
         )
         # Enrich app-managed sessions with the run's parsed questions (needs_input).
         q_by_sid = {r.session_id: r.questions for r in runs.list() if r.session_id and r.questions}
+        dismissed = session_radar.load_dismissed(_dismiss_path)
         out = []
         for si in found:
             d = asdict(si)
             d["questions"] = q_by_sid.get(si.session_id, [])
             d["linear_url"] = _linear_url(si.linear_key)
+            d["dismissed"] = session_radar.is_dismissed(dismissed, si.session_id, si.last_active)
             out.append(d)
         return {"sessions": out}
+
+    @app.post("/api/sessions/dismiss")
+    def dismiss_session(body: SessionDismiss):
+        session_radar.dismiss(_dismiss_path, body.session_id, body.last_active or "")
+        return {"ok": True}
 
     @app.post("/api/sessions/resume")
     def resume_session(body: SessionResume):
