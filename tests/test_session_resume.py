@@ -56,7 +56,7 @@ def test_fix_resumes_original_claude_session(tmp_path, monkeypatch):
     captured = []
     monkeypatch.setattr(runner, "resolve_cli", lambda family, **k: family)
     monkeypatch.setattr(runner, "run_agent", lambda **kw: captured.append(kw) or DONE)
-    monkeypatch.setattr(gitops, "worktree_for", lambda *a, **k: "/wt")
+    monkeypatch.setattr(gitops, "ensure_worktree_for_branch", lambda *a, **k: "/wt")
     monkeypatch.setattr(gitops, "push_branch", lambda *a, **k: None)
 
     meta = PRMeta(linear_issue="DEV-1", ai_author="opus-4.8", ai_reviewer="codex-5.5",
@@ -74,7 +74,7 @@ def test_fix_with_codex_meta_does_not_resume(tmp_path, monkeypatch):
     captured = []
     monkeypatch.setattr(runner, "resolve_cli", lambda family, **k: family)
     monkeypatch.setattr(runner, "run_agent", lambda **kw: captured.append(kw) or DONE)
-    monkeypatch.setattr(gitops, "worktree_for", lambda *a, **k: "/wt")
+    monkeypatch.setattr(gitops, "ensure_worktree_for_branch", lambda *a, **k: "/wt")
     monkeypatch.setattr(gitops, "push_branch", lambda *a, **k: None)
 
     meta = PRMeta(linear_issue="DEV-1", ai_author="codex-5.4", ai_reviewer="codex-5.5",
