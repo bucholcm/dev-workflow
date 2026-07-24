@@ -41,6 +41,16 @@ mutation Comment($issueId: String!, $body: String!) {
 }
 """
 
+_ISSUE_QUERY = """
+query Issue($id: String!) {
+  issue(id: $id) {
+    id identifier title description url
+    state { name }
+    labels { nodes { name } }
+  }
+}
+"""
+
 _STATES_QUERY = """
 query States($teamId: ID!) {
   workflowStates(filter: { team: { id: { eq: $teamId } } }, first: 100) {
@@ -114,6 +124,11 @@ class LinearClient:
             filt["team"] = {"id": {"eq": self.team_id}}
         nodes = self._gql(_ISSUES_QUERY, {"filter": filt})["issues"]["nodes"]
         return [_to_issue(n) for n in nodes]
+
+    def get_issue(self, key: str) -> LinearIssue | None:
+        """Fetch a single issue by identifier (e.g. 'BRI-61') or UUID — even outside actionable states."""
+        node = self._gql(_ISSUE_QUERY, {"id": key}).get("issue")
+        return _to_issue(node) if node else None
 
     def workspace_url_key(self) -> str:
         """Org slug used in issue URLs, e.g. 'bridge-soi' → https://linear.app/bridge-soi/issue/BRI-1."""

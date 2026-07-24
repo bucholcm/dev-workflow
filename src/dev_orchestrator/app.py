@@ -122,6 +122,28 @@ def create_app() -> FastAPI:
     # without a second Linear round-trip. Refreshed by GET /api/work.
     issue_cache: dict[str, LinearIssue] = {}
 
+    def _resolve_issue(key: str | None) -> LinearIssue | None:
+        """Key → issue: the work cache first, else a direct Linear lookup.
+
+        Review/Fix on a PR often targets an issue that has left the actionable
+        states (e.g. Human Review), so it won't be in the cache — fetch it so the
+        fix can still recover the author/session and move Linear state.
+        """
+        if not key:
+            return None
+        hit = issue_cache.get(key)
+        if hit:
+            return hit
+        if linear:
+            try:
+                got = linear.get_issue(key)
+                if got:
+                    issue_cache[got.identifier] = got
+                return got
+            except Exception as e:  # noqa: BLE001
+                logger.warning("could not fetch issue %s: %s", key, e)
+        return None
+
     # ── routes ──
     @app.get("/")
     def index():
@@ -187,19 +209,19 @@ def create_app() -> FastAPI:
 
     @app.post("/api/dispatch/review")
     def dispatch_review(body: DispatchPR):
-        issue = issue_cache.get(body.issue_key) if body.issue_key else None
+        issue = _resolve_issue(body.issue_key)
         repo = body.repo or (issue.repo if issue else s.bitbucket_repo)
         return {"run_id": orch.dispatch_review(issue, body.pr_id, repo)}
 
     @app.post("/api/dispatch/fix")
     def dispatch_fix(body: DispatchPR):
-        issue = issue_cache.get(body.issue_key) if body.issue_key else None
+        issue = _resolve_issue(body.issue_key)
         repo = body.repo or (issue.repo if issue else s.bitbucket_repo)
         return {"run_id": orch.dispatch_fix(issue, body.pr_id, repo)}
 
     @app.post("/api/dispatch/answer")
     def dispatch_answer(body: DispatchAnswer):
-        issue = issue_cache.get(body.issue_key)
+        issue = _resolve_issue(body.issue_key)
         if not issue:
             raise HTTPException(404, f"unknown issue {body.issue_key}; refresh /api/work first")
         return {"run_id": orch.dispatch_answer(issue, body.answer)}
