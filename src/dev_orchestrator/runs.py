@@ -12,8 +12,10 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Literal
 
-RunKind = Literal["implement", "review", "fix", "resume"]
-RunStatus = Literal["running", "passed", "needs_fixes", "needs_input", "human_review", "failed", "dry_run"]
+RunKind = Literal["implement", "review", "fix", "resume", "release"]
+RunStatus = Literal[
+    "running", "passed", "needs_fixes", "needs_input", "human_review", "failed", "dry_run", "released",
+]
 
 
 @dataclass

@@ -147,7 +147,8 @@ function prCard(p){
     <div class="meta">${escapeHtml(p.source_branch)} → ${escapeHtml(p.destination_branch)}${p.author?` · ${escapeHtml(p.author)}`:''}${key}${p.draft?' · draft':''}</div>
     <div class="actions">
       <button onclick="dispatchPr('review', ${p.pr_id}, '${p.repo}', ${jsKey})">Review</button>
-      <button onclick="dispatchPr('fix', ${p.pr_id}, '${p.repo}', ${jsKey})">Fix</button>
+      <button onclick="dispatchPr('fix', ${p.pr_id}, '${p.repo}', ${jsKey})">Request changes</button>
+      <button onclick="dispatchPr('release', ${p.pr_id}, '${p.repo}', ${jsKey})" title="Approved — mark Ready to Merge; you merge in Bitbucket">Release</button>
     </div>
   </div>`;
 }

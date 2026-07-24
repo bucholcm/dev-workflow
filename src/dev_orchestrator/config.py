@@ -103,6 +103,11 @@ class Settings(BaseSettings):
         """Durable issue→session index; lives beside runs but survives clearing runs/*.jsonl."""
         return str(Path(self.runs_dir) / "session_index.json")
 
+    @property
+    def review_index_path(self) -> str:
+        """Per-PR review state (session + turn count) for multi-turn review."""
+        return str(Path(self.runs_dir) / "review_index.json")
+
     def resolve_bitbucket(self) -> Settings:
         """Fill missing Bitbucket creds from bin/bb's on-disk sources."""
         if not (self.bitbucket_username and self.bitbucket_token):

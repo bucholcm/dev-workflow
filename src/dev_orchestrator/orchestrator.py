@@ -11,7 +11,7 @@ import logging
 import threading
 import uuid
 
-from . import gitops, prompts, runner, session_index
+from . import gitops, prompts, review_index, runner, session_index
 from .config import Settings
 from .escalation_parser import parse_escalation
 from .models import Decision, LinearIssue, ReviewResult, Severity, WorkflowState
@@ -237,14 +237,18 @@ class Orchestrator:
         self.runs.event(run_id, "pr", f"opened {pr.url}")
         return pr
 
-    # ── 2. review ──
+    # ── 2. review (multi-turn: remembers prior rounds) ──
     def dispatch_review(self, issue: LinearIssue | None, pr_id: int, repo_slug: str) -> str:
         key = issue.identifier if issue else f"PR-{pr_id}"
         run_id = self._new_run_id()
-        self.runs.start(run_id, "review", key, agent=self.s.model_review)
+        prior = review_index.get(self.s.review_index_path, pr_id) or {}
+        turn = prior.get("turns", 0) + 1
+        self.runs.start(run_id, "review", key, agent=self.s.model_review,
+                        session_id=prior.get("session_id", ""), cli=prior.get("cli", ""))
 
         if self.s.dry_run:
-            self.runs.event(run_id, "review", f"[dry-run] would review PR #{pr_id} with {self.s.model_review}")
+            msg = f"[dry-run] would review PR #{pr_id} (round {turn}) with {self.s.model_review}"
+            self.runs.event(run_id, "review", msg)
             self.runs.finish(run_id, "dry_run")
             return run_id
 
@@ -253,15 +257,24 @@ class Orchestrator:
             pr = bb.get_pr(pr_id)
             wt = gitops.ensure_worktree_for_branch(self.s.target_repo_path, pr.source_branch)
             cli = runner.resolve_cli(self.s.cli_for_review, allow_claude_fallback=self.s.codex_fallback_to_claude)
-            prompt = prompts.build_review_prompt(issue, pr.title)
-            self.runs.event(run_id, "review", f"running {cli} ({self.s.model_review})")
+            # Continuity: resume the claude review session; else feed prior findings into the prompt.
+            r_session = prior.get("session_id", "")
+            can_resume = bool(r_session) and cli == "claude" and prior.get("cli") == "claude"
+            if cli == "claude" and not r_session:
+                r_session = str(uuid.uuid4())
+            prior_context = self._summarize_unresolved(bb, pr_id) if turn > 1 else ""
+            prompt = prompts.build_review_prompt(issue, pr.title, turn=turn, prior_context=prior_context)
+            how = "resuming review session" if can_resume else ("new review session" if r_session else "no session")
+            self.runs.event(run_id, "review", f"round {turn} — {cli} ({self.s.model_review}) — {how}")
             raw = runner.run_agent(
                 cli=cli, prompt=prompt, cwd=wt, read_only=True,
                 timeout=self.s.agent_timeout_seconds,
                 on_event=lambda p, m: self.runs.event(run_id, p, m),
+                session_id=(r_session or None) if cli == "claude" else None, resume=can_resume,
             )
             result = parse_review_output(raw)
             self._post_review(run_id, bb, pr_id, result)
+            review_index.record(self.s.review_index_path, pr_id, r_session if cli == "claude" else "", cli, turn)
             self._apply_review_decision(run_id, issue, result, pr_id, repo_slug)
         except Exception as e:  # noqa: BLE001
             logger.exception("review failed for PR #%d", pr_id)
@@ -422,6 +435,29 @@ class Orchestrator:
         except Exception as e:  # noqa: BLE001
             logger.exception("resume_session failed for %s", session_id)
             self.runs.event(run_id, "resume", f"failed: {e}")
+            self.runs.finish(run_id, "failed")
+        return run_id
+
+    # ── 5. release (human approved → ready to merge; human merges in Bitbucket) ──
+    def dispatch_release(self, issue: LinearIssue | None, pr_id: int, repo_slug: str) -> str:
+        key = issue.identifier if issue else f"PR-{pr_id}"
+        run_id = self._new_run_id()
+        self.runs.start(run_id, "release", key)
+        if self.s.dry_run:
+            msg = f"[dry-run] would mark PR #{pr_id} Ready to Merge (you merge in Bitbucket)"
+            self.runs.event(run_id, "release", msg)
+            self.runs.finish(run_id, "dry_run")
+            return run_id
+        try:
+            bb = self._make_bb(repo_slug)
+            bb.post_comment(pr_id, "Human approved — released. Merge this PR in Bitbucket to complete.")
+            if issue:
+                self._set_state(run_id, issue, WorkflowState.READY_TO_MERGE)
+            self.runs.event(run_id, "release", f"PR #{pr_id} → Ready to Merge (merge in Bitbucket)")
+            self.runs.finish(run_id, "released")
+        except Exception as e:  # noqa: BLE001
+            logger.exception("release failed for PR #%d", pr_id)
+            self.runs.event(run_id, "release", f"failed: {e}")
             self.runs.finish(run_id, "failed")
         return run_id
 

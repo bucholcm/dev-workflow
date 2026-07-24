@@ -224,6 +224,12 @@ def create_app() -> FastAPI:
         repo = body.repo or (issue.repo if issue else s.bitbucket_repo)
         return {"run_id": orch.dispatch_fix(issue, body.pr_id, repo)}
 
+    @app.post("/api/dispatch/release")
+    def dispatch_release(body: DispatchPR):
+        issue = _resolve_issue(body.issue_key)
+        repo = body.repo or (issue.repo if issue else s.bitbucket_repo)
+        return {"run_id": orch.dispatch_release(issue, body.pr_id, repo)}
+
     @app.post("/api/dispatch/answer")
     def dispatch_answer(body: DispatchAnswer):
         issue = _resolve_issue(body.issue_key)

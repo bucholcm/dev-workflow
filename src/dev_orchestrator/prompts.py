@@ -62,13 +62,23 @@ This is a {role} change. Follow the repository's AGENTS.md / CLAUDE.md conventio
 """
 
 
-def build_review_prompt(issue: LinearIssue | None, pr_title: str, diff_hint: str = "") -> str:
+def build_review_prompt(
+    issue: LinearIssue | None, pr_title: str, diff_hint: str = "", *, turn: int = 1, prior_context: str = "",
+) -> str:
     ac = issue.description if issue else "(acceptance criteria unavailable — infer from the diff)"
+    turn_note = ""
+    if turn > 1:
+        turn_note = (
+            f"\n## This is review round {turn} — the code was changed since your last review.\n"
+            "First verify whether the points you raised before are now ADDRESSED (say which are "
+            "resolved), then review the current diff for anything still open or newly introduced.\n"
+            + (f"\nStill-open / prior comments to check:\n{prior_context}\n" if prior_context else "")
+        )
     return f"""You are the delivery-review agent. Review the pull request in this checkout.
 
 PR: {pr_title}
 {f"Linear issue: {issue.identifier} — {issue.title}" if issue else ""}
-
+{turn_note}
 ## Acceptance criteria to check
 {ac}
 
