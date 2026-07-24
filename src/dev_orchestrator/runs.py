@@ -54,6 +54,37 @@ class RunRegistry:
         with (self._dir / f"{run_id}.jsonl").open("a") as fh:
             fh.write(json.dumps(record) + "\n")
 
+    def hydrate(self) -> int:
+        """Rebuild in-memory runs from prior runs/*.jsonl so history (and pinned session
+        ids) survive a restart. Ordered by file mtime → insertion order ≈ chronological."""
+        count = 0
+        files = sorted(self._dir.glob("*.jsonl"), key=lambda p: p.stat().st_mtime if p.exists() else 0)
+        for f in files:
+            run: Run | None = None
+            try:
+                for line in f.read_text().splitlines():
+                    if not line.strip():
+                        continue
+                    rec = json.loads(line)
+                    ev = rec.get("event")
+                    if ev == "start":
+                        run = Run(
+                            id=f.stem, kind=rec.get("kind", "implement"), issue_key=rec.get("issue", ""),
+                            agent=rec.get("agent", ""), session_id=rec.get("session_id", ""), cli=rec.get("cli", ""),
+                        )
+                    elif ev == "finish" and run:
+                        run.status = rec.get("status", run.status)
+                        run.pr_url = rec.get("pr_url", "") or run.pr_url
+                    elif ev == "needs_input" and run:
+                        run.questions = rec.get("questions", []) or run.questions
+            except (OSError, ValueError):
+                continue
+            if run:
+                with self._lock:
+                    self._runs.setdefault(run.id, run)  # never clobber a live run
+                count += 1
+        return count
+
     def start(
         self,
         run_id: str,
@@ -118,4 +149,10 @@ class RunRegistry:
         """Most recently created run for an issue (insertion order); used to recover a paused session."""
         with self._lock:
             found = [run for run in self._runs.values() if run.issue_key == issue_key]
+        return found[-1] if found else None
+
+    def latest_session_for_issue(self, issue_key: str) -> Run | None:
+        """Most recent run for an issue that carries a pinned session (for fix/resume recovery)."""
+        with self._lock:
+            found = [r for r in self._runs.values() if r.issue_key == issue_key and r.session_id]
         return found[-1] if found else None

@@ -8,6 +8,7 @@ design §7 (missing fields → don't run; agent/parse failure → Human Review).
 from __future__ import annotations
 
 import logging
+import threading
 import uuid
 
 from . import gitops, prompts, runner
@@ -29,10 +30,64 @@ class Orchestrator:
         self.linear = linear                      # LinearClient | None (None in pure DRY_RUN)
         self._make_bb = make_bitbucket            # callable(repo_slug) -> BitbucketClient
         self._state_ids = state_ids or {}         # {state_name: id}
+        self._auto_rounds: dict[str, int] = {}    # per-issue auto fix→review cycle counter
+        self._auto_lock = threading.Lock()
 
     # ── helpers ──
     def _new_run_id(self) -> str:
         return uuid.uuid4().hex[:12]
+
+    def _spawn(self, fn, *args) -> None:
+        """Run a follow-up dispatch in a daemon thread so the current one returns promptly."""
+        threading.Thread(target=self._guarded, args=(fn, *args), daemon=True).start()
+
+    def _guarded(self, fn, *args) -> None:
+        try:
+            fn(*args)
+        except Exception:  # noqa: BLE001 — a background chain must never crash the app
+            logger.exception("auto-flow background step failed")
+
+    def _recover_author(self, run_id: str, issue: LinearIssue | None, bb, pr_id: int) -> tuple[str, str, str]:
+        """Recover (author, session_id, cli) for a fix — from the PR meta-block, else run history.
+
+        The run-history fallback lets Fix route to the original agent even for a PR the
+        orchestrator did not open itself (no meta-block), e.g. an agent- or human-opened PR.
+        """
+        meta = parse_meta(bb.get_pr_description(pr_id))
+        author = meta.ai_author if meta else ""
+        sess_id = meta.ai_session_id if meta else ""
+        sess_cli = meta.ai_cli if meta else ""
+        if issue and (not author or not sess_id):
+            prior = self.runs.latest_session_for_issue(issue.identifier)
+            if prior:
+                author, sess_id, sess_cli = author or prior.agent, sess_id or prior.session_id, sess_cli or prior.cli
+                self.runs.event(run_id, "fix", f"recovered author/session from run {prior.id} (no PR meta-block)")
+        return author, sess_id, sess_cli
+
+    # ── auto-flow: route review findings back to the implementing agent ──
+    def _auto_enabled(self, issue: LinearIssue | None) -> bool:
+        return bool(self.s.auto_fix_on_review and issue and not self.s.dry_run)
+
+    def _maybe_auto_fix(self, issue: LinearIssue | None, pr_id: int, repo_slug: str) -> bool:
+        """After a fixable review verdict, auto-dispatch a Fix to the original agent (bounded)."""
+        if not self._auto_enabled(issue):
+            return False
+        key = issue.identifier
+        with self._auto_lock:
+            rounds = self._auto_rounds.get(key, 0)
+            if rounds >= self.s.max_auto_review_rounds:
+                logger.info("auto-fix rounds exhausted for %s → leaving for human", key)
+                return False
+            self._auto_rounds[key] = rounds + 1
+        logger.info("auto-routing %s back to the agent (fix round %d/%d)",
+                    key, rounds + 1, self.s.max_auto_review_rounds)
+        self._spawn(self.dispatch_fix, issue, pr_id, repo_slug)
+        return True
+
+    def _maybe_auto_review(self, issue: LinearIssue | None, pr_id: int, repo_slug: str) -> None:
+        """After a successful auto-fix, re-review so the loop continues to convergence."""
+        if self._auto_enabled(issue):
+            self._spawn(self.dispatch_review, issue, pr_id, repo_slug)
 
     def _set_state(self, run_id: str, issue: LinearIssue, state: WorkflowState) -> None:
         if self.s.dry_run:
@@ -198,7 +253,7 @@ class Orchestrator:
             )
             result = parse_review_output(raw)
             self._post_review(run_id, bb, pr_id, result)
-            self._apply_review_decision(run_id, issue, result)
+            self._apply_review_decision(run_id, issue, result, pr_id, repo_slug)
         except Exception as e:  # noqa: BLE001
             logger.exception("review failed for PR #%d", pr_id)
             if issue:
@@ -211,7 +266,9 @@ class Orchestrator:
         bb.post_comment(pr_id, render_review_markdown(result))
         self.runs.event(run_id, "review", f"decision={result.decision}")
 
-    def _apply_review_decision(self, run_id: str, issue: LinearIssue | None, result: ReviewResult) -> None:
+    def _apply_review_decision(
+        self, run_id: str, issue: LinearIssue | None, result: ReviewResult, pr_id: int = 0, repo_slug: str = "",
+    ) -> None:
         if result.decision == Decision.PASS:
             if issue:
                 self._set_state(run_id, issue, WorkflowState.HUMAN_REVIEW)
@@ -220,10 +277,12 @@ class Orchestrator:
             if issue:
                 self._set_state(run_id, issue, WorkflowState.NEEDS_FIXES)
             self.runs.finish(run_id, "needs_fixes")
+            self._maybe_auto_fix(issue, pr_id, repo_slug)
         else:  # require_human_review
             if issue:
                 self._set_state(run_id, issue, WorkflowState.HUMAN_REVIEW)
             self.runs.finish(run_id, "human_review")
+            self._maybe_auto_fix(issue, pr_id, repo_slug)
 
     # ── 3. fix ──
     def dispatch_fix(self, issue: LinearIssue | None, pr_id: int, repo_slug: str) -> str:
@@ -239,29 +298,30 @@ class Orchestrator:
         try:
             bb = self._make_bb(repo_slug)
             pr = bb.get_pr(pr_id)
-            meta = parse_meta(bb.get_pr_description(pr_id))
-            if not meta or not meta.ai_author:
+            author, sess_id, sess_cli = self._recover_author(run_id, issue, bb, pr_id)
+            if not author and not sess_id:
                 if issue:
-                    self._comment(run_id, issue, "No ai_author in PR meta — cannot auto-fix; needs human triage.")
+                    self._comment(run_id, issue, "Cannot identify the original agent (no PR meta, no run history).")
                     self._set_state(run_id, issue, WorkflowState.HUMAN_REVIEW)
-                bb.post_comment(pr_id, "Cannot auto-fix: original authoring agent unknown (missing PR meta).")
+                bb.post_comment(pr_id, "Cannot auto-fix: original authoring agent unknown.")
                 self.runs.finish(run_id, "human_review")
                 return run_id
 
             unresolved = self._summarize_unresolved(bb, pr_id)
             wt = gitops.ensure_worktree_for_branch(self.s.target_repo_path, pr.source_branch)
             fallback = self.s.codex_fallback_to_claude
-            cli = runner.resolve_cli(self._cli_family(meta.ai_author), allow_claude_fallback=fallback)
+            cli = runner.resolve_cli(self._cli_family(author or self.s.model_complex_implementation),
+                                     allow_claude_fallback=fallback)
             # Resume the ORIGINAL session so the fix keeps full authoring context
-            # (claude-only; codex meta or an absent id falls back to a cold prompt).
-            resume = bool(meta.ai_session_id) and cli == "claude" and meta.ai_cli == "claude"
-            how = f"resuming session {meta.ai_session_id[:8]}…" if resume else "cold prompt (no resumable session)"
-            self.runs.event(run_id, "fix", f"running original author {meta.ai_author} ({cli}) — {how}")
+            # (claude-only; codex or an absent id falls back to a cold prompt).
+            resume = bool(sess_id) and cli == "claude" and sess_cli == "claude"
+            how = f"resuming session {sess_id[:8]}…" if resume else "cold prompt (no resumable session)"
+            self.runs.event(run_id, "fix", f"running original author {author or cli} ({cli}) — {how}")
             raw = runner.run_agent(
                 cli=cli, prompt=prompts.build_fix_prompt(issue, unresolved), cwd=wt, read_only=False,
                 timeout=self.s.agent_timeout_seconds,
                 on_event=lambda p, m: self.runs.event(run_id, p, m),
-                session_id=meta.ai_session_id or None, resume=resume,
+                session_id=sess_id or None, resume=resume,
             )
             if self._handle_escalation(run_id, issue, raw):
                 return run_id
@@ -270,6 +330,7 @@ class Orchestrator:
             if issue:
                 self._set_state(run_id, issue, WorkflowState.AI_REVIEW)
             self.runs.finish(run_id, "passed")
+            self._maybe_auto_review(issue, pr_id, repo_slug)
         except Exception as e:  # noqa: BLE001
             logger.exception("fix failed for PR #%d", pr_id)
             if issue:

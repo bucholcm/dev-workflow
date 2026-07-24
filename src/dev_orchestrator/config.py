@@ -74,6 +74,14 @@ class Settings(BaseSettings):
     cli_for_review: str = "codex"
     codex_fallback_to_claude: bool = True
 
+    # ── Auto-flow: route review findings straight back to the implementing agent ──
+    # When true, a review that returns needs_fixes / require_human_review auto-
+    # dispatches a Fix to the original agent (background) and re-reviews, up to
+    # `max_auto_review_rounds` cycles per issue, then stops for a human.
+    # NOTE: this removes the human gate on risky (auth/crypto/migration) changes.
+    auto_fix_on_review: bool = False
+    max_auto_review_rounds: int = 3
+
     # ── Runtime ──
     target_repo_path: str = ""     # working checkout where claude/codex run
     runs_dir: str = "runs"

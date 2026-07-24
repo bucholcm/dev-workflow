@@ -85,6 +85,9 @@ def create_app() -> FastAPI:
     app = FastAPI(title="dev-orchestrator", version="0.1.0")
 
     runs = RunRegistry(s.runs_dir, clock=_now_iso)
+    _hydrated = runs.hydrate()  # restore prior runs (+ pinned session ids) across restarts
+    if _hydrated:
+        logger.info("hydrated %d prior runs from %s", _hydrated, s.runs_dir)
     _dismiss_path = str(Path(s.runs_dir) / "dismissed_sessions.json")
 
     linear = LinearClient(s.linear_api_key, s.linear_team_id) if s.linear_api_key else None
