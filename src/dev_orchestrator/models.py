@@ -75,6 +75,33 @@ class LinearIssue:
         return missing
 
 
+# ── Claude session radar (scanned from ~/.claude/projects) ──────────────────
+
+class Attention(enum.StrEnum):
+    RUNNING = "running"                    # file active within the idle window — leave alone
+    WAITING_APPROVAL = "waiting_approval"  # last act is a tool_use awaiting the human's approval
+    WAITING_INPUT = "waiting_input"        # Claude spoke last, idle — ball is in the human's court
+    IDLE = "idle"                          # nothing pending
+
+
+@dataclass
+class SessionInfo:
+    """A Claude Code session on disk, projected onto what the radar surfaces."""
+
+    session_id: str
+    title: str
+    cwd: str
+    git_branch: str
+    last_active: str                    # ISO timestamp of the newest record
+    attention: Attention
+    mode: str = ""                      # permission mode of the session, if known
+    file: str = ""                      # absolute path to the .jsonl transcript
+    # Correlation to orchestrator work (best-effort).
+    repo_matched: bool = False          # cwd under TARGET_REPO_PATH (or its worktrees)
+    linear_key: str | None = None       # e.g. "BRI-59", recovered from an ai/<KEY>-… branch
+    app_managed: bool = False           # session_id matches a pinned orchestrator session
+
+
 # ── Routing decision (output of the pure routing function) ──────────────────
 
 @dataclass

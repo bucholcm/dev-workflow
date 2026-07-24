@@ -50,11 +50,27 @@ def resolve_cli(family: str, *, allow_claude_fallback: bool) -> str:
     raise ValueError(f"unknown CLI family: {family}")
 
 
-def _build_command(cli: str, prompt: str, *, model: str | None, read_only: bool) -> tuple[list[str], str | None]:
-    """Return (argv, stdin_input). stdin_input is None when the prompt goes via a flag."""
+def _build_command(
+    cli: str,
+    prompt: str,
+    *,
+    model: str | None,
+    read_only: bool,
+    session_id: str | None = None,
+    resume: bool = False,
+) -> tuple[list[str], str | None]:
+    """Return (argv, stdin_input). stdin_input is None when the prompt goes via a flag.
+
+    Session handling is claude-only. On a fresh run pass `--session-id <uuid>` to
+    pin a known session; on a later turn pass `--resume <uuid>` to continue that
+    exact session (design: session management). Codex has a separate resume model,
+    so the session args are ignored for the codex CLI.
+    """
     model_args = ["--model", model] if model else []
     if cli == "claude":
         base = ["claude", "--print"]
+        if session_id:
+            base += ["--resume", session_id] if resume else ["--session-id", session_id]
         if read_only:
             base += ["--disallowedTools", "Write,Edit"]
         return [*base, *model_args, "-p", prompt], None
@@ -74,13 +90,20 @@ def run_agent(
     read_only: bool = False,
     timeout: int = 900,
     on_event=None,
+    session_id: str | None = None,
+    resume: bool = False,
 ) -> str:
     """Run the agent CLI headless in `cwd`, streaming stderr to `on_event`. Returns stdout.
 
     Raises AgentUnavailable / RuntimeError on failure so the orchestrator can
     move the Linear issue to Human Review.
+
+    `session_id` pins a claude session (or resumes it when `resume=True`) so a
+    later fix/answer turn continues the original conversation with full context.
     """
-    argv, stdin_input = _build_command(cli, prompt, model=model, read_only=read_only)
+    argv, stdin_input = _build_command(
+        cli, prompt, model=model, read_only=read_only, session_id=session_id, resume=resume
+    )
     if on_event:
         on_event("spawn", f"{cli} {'(read-only)' if read_only else ''} in {cwd}")
 

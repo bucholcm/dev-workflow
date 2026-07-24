@@ -10,6 +10,8 @@ Every AI-created PR carries a machine-readable HTML comment so later steps
     ai_reviewer: codex-5.5
     ai_complexity: s
     ai_risk: low
+    ai_session_id: 9dd4b6bc-27b1-4621-8990-fa2831388323
+    ai_cli: claude
     source: dev-orchestrator
     -->
 """
@@ -31,6 +33,8 @@ class PRMeta:
     ai_reviewer: str = ""
     ai_complexity: str = ""
     ai_risk: str = ""
+    ai_session_id: str = ""   # pinned Claude session id (claude CLI only) → resume on fix
+    ai_cli: str = ""          # "claude" | "codex" — which engine authored (resume is claude-only)
     source: str = "dev-orchestrator"
 
     def to_block(self) -> str:

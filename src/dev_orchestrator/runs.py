@@ -12,8 +12,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Literal
 
-RunKind = Literal["implement", "review", "fix"]
-RunStatus = Literal["running", "passed", "needs_fixes", "human_review", "failed", "dry_run"]
+RunKind = Literal["implement", "review", "fix", "resume"]
+RunStatus = Literal["running", "passed", "needs_fixes", "needs_input", "human_review", "failed", "dry_run"]
 
 
 @dataclass
@@ -31,6 +31,9 @@ class Run:
     status: RunStatus = "running"
     agent: str = ""
     pr_url: str = ""
+    session_id: str = ""                                # pinned Claude session (claude CLI only)
+    cli: str = ""                                       # "claude" | "codex"
+    questions: list[str] = field(default_factory=list)  # escalation payload when status == needs_input
     events: list[RunEvent] = field(default_factory=list)
 
     def log_tail(self, n: int = 40) -> list[dict]:
@@ -51,12 +54,32 @@ class RunRegistry:
         with (self._dir / f"{run_id}.jsonl").open("a") as fh:
             fh.write(json.dumps(record) + "\n")
 
-    def start(self, run_id: str, kind: RunKind, issue_key: str, agent: str = "", pr_url: str = "") -> Run:
-        run = Run(id=run_id, kind=kind, issue_key=issue_key, agent=agent, pr_url=pr_url)
+    def start(
+        self,
+        run_id: str,
+        kind: RunKind,
+        issue_key: str,
+        agent: str = "",
+        pr_url: str = "",
+        session_id: str = "",
+        cli: str = "",
+    ) -> Run:
+        run = Run(id=run_id, kind=kind, issue_key=issue_key, agent=agent, pr_url=pr_url, session_id=session_id, cli=cli)
         with self._lock:
             self._runs[run_id] = run
-        self._append_jsonl(run_id, {"event": "start", "kind": kind, "issue": issue_key, "agent": agent})
+        self._append_jsonl(
+            run_id,
+            {"event": "start", "kind": kind, "issue": issue_key, "agent": agent, "session_id": session_id, "cli": cli},
+        )
         return run
+
+    def set_questions(self, run_id: str, questions: list[str]) -> None:
+        """Attach the agent's escalation questions to a run (status → needs_input)."""
+        with self._lock:
+            run = self._runs.get(run_id)
+            if run:
+                run.questions = list(questions)
+        self._append_jsonl(run_id, {"event": "needs_input", "questions": questions})
 
     def event(self, run_id: str, phase: str, message: str) -> None:
         ev = RunEvent(ts=self._clock(), phase=phase, message=message)
@@ -90,3 +113,9 @@ class RunRegistry:
                 if run.issue_key == issue_key and run.status == "running":
                     return run
         return None
+
+    def latest_for_issue(self, issue_key: str) -> Run | None:
+        """Most recently created run for an issue (insertion order); used to recover a paused session."""
+        with self._lock:
+            found = [run for run in self._runs.values() if run.issue_key == issue_key]
+        return found[-1] if found else None

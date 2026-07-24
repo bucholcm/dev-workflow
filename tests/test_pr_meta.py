@@ -24,3 +24,12 @@ def test_parse_meta_from_full_description():
 
 def test_parse_meta_absent_returns_none():
     assert parse_meta("just a normal PR body, no meta") is None
+
+
+def test_meta_roundtrips_session_id_and_cli():
+    meta = PRMeta(linear_issue="DEV-7", ai_author="opus-4.8", ai_reviewer="codex-5.5",
+                  ai_session_id="9dd4b6bc-27b1-4621-8990-fa2831388323", ai_cli="claude")
+    parsed = parse_meta(meta.to_block())
+    assert parsed.ai_session_id == "9dd4b6bc-27b1-4621-8990-fa2831388323"
+    assert parsed.ai_cli == "claude"
+    assert parsed == meta

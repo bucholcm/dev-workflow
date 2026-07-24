@@ -81,6 +81,15 @@ class Settings(BaseSettings):
     dry_run: bool = True           # default ON so it runs with zero live creds
     agent_timeout_seconds: int = 900
 
+    # ── Session radar (scans Claude Code transcripts for "needs your attention") ──
+    claude_projects_dir: str = ""  # default ~/.claude/projects (resolved below)
+    session_idle_seconds: int = 45  # newer than this = "running"; older + pending = "waiting"
+    session_waiting_max_age_seconds: int = 172800  # 2d — older pending turns aren't "waiting on you"
+
+    @property
+    def claude_projects_path(self) -> str:
+        return self.claude_projects_dir or str(Path.home() / ".claude" / "projects")
+
     def resolve_bitbucket(self) -> Settings:
         """Fill missing Bitbucket creds from bin/bb's on-disk sources."""
         if not (self.bitbucket_username and self.bitbucket_token):

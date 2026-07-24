@@ -1,8 +1,8 @@
 <meta charset="utf-8" />
 <title>dev-orchestrator</title>
 <style>
-  :root { color-scheme: light dark; --fg:#111; --muted:#666; --bg:#fff; --card:#f6f6f7; --line:#e2e2e5; --accent:#3b5bdb; }
-  @media (prefers-color-scheme: dark){ :root{ --fg:#e8e8ea; --muted:#9a9aa2; --bg:#111214; --card:#1c1d21; --line:#2c2d33; --accent:#748ffc; } }
+  :root { color-scheme: light dark; --fg:#111; --muted:#666; --bg:#fff; --card:#f6f6f7; --line:#e2e2e5; --accent:#3b5bdb; --warn:#e8590c; --warnbg:#e8590c14; }
+  @media (prefers-color-scheme: dark){ :root{ --fg:#e8e8ea; --muted:#9a9aa2; --bg:#111214; --card:#1c1d21; --line:#2c2d33; --accent:#748ffc; --warn:#ff922b; --warnbg:#ff922b1c; } }
   * { box-sizing:border-box; }
   body { font:14px/1.5 -apple-system,system-ui,sans-serif; margin:0; color:var(--fg); background:var(--bg); }
   header { padding:16px 24px; border-bottom:1px solid var(--line); display:flex; gap:12px; align-items:center; }
@@ -19,11 +19,23 @@
   .state { font-size:11px; padding:1px 7px; border-radius:6px; background:var(--bg); border:1px solid var(--line); }
   button { font:inherit; border:1px solid var(--line); background:var(--bg); color:var(--fg); border-radius:7px; padding:4px 10px; cursor:pointer; }
   button:hover { border-color:var(--accent); color:var(--accent); }
-  .actions { display:flex; gap:6px; margin-top:10px; }
-  .status-running{ color:var(--accent);} .status-passed,.status-dry_run{ color:#2f9e44;} .status-needs_fixes{ color:#e8590c;} .status-failed{ color:#e03131;} .status-human_review{ color:#ae3ec9;}
+  .actions { display:flex; gap:6px; margin-top:10px; flex-wrap:wrap; }
+  .status-running{ color:var(--accent);} .status-passed,.status-dry_run{ color:#2f9e44;} .status-needs_fixes,.status-needs_input{ color:#e8590c;} .status-failed{ color:#e03131;} .status-human_review{ color:#ae3ec9;}
   pre { background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:8px; overflow-x:auto; font-size:12px; max-height:200px; }
   .empty { color:var(--muted); font-style:italic; }
   a { color:var(--accent); }
+  /* Attention panel */
+  #attention-wrap { padding:20px 24px 0; }
+  #attention-wrap h2 { color:var(--warn); }
+  .att-card { background:var(--warnbg); border:1px solid var(--warn); border-radius:10px; padding:12px 14px; margin-bottom:10px; }
+  .att-tag { font-size:11px; padding:1px 7px; border-radius:6px; border:1px solid var(--warn); color:var(--warn); }
+  .qs { margin:8px 0; padding-left:18px; }
+  .qs li { margin:2px 0; }
+  textarea { width:100%; font:inherit; border:1px solid var(--line); border-radius:7px; padding:6px 8px; background:var(--bg); color:var(--fg); resize:vertical; min-height:52px; }
+  .sess-tag { font-size:11px; padding:1px 7px; border-radius:6px; border:1px solid var(--line); color:var(--muted); }
+  .sess-tag.waiting_input,.sess-tag.waiting_approval { color:var(--warn); border-color:var(--warn); }
+  .sess-tag.running { color:var(--accent); border-color:var(--accent); }
+  .linkmatch { color:var(--accent); }
 </style>
 
 <header>
@@ -33,6 +45,11 @@
   <span style="flex:1"></span>
   <button onclick="refresh()">↻ Refresh</button>
 </header>
+
+<section id="attention-wrap" style="display:none">
+  <h2>⚠ Needs your attention</h2>
+  <div id="attention"></div>
+</section>
 
 <main>
   <section>
@@ -45,6 +62,16 @@
   </section>
 </main>
 
+<section style="padding:0 24px 8px">
+  <h2>Open PRs — review queue</h2>
+  <div id="prs"><p class="empty">Loading…</p></div>
+</section>
+
+<section style="padding:0 24px 24px">
+  <h2>Claude sessions</h2>
+  <div id="sessions"><p class="empty">Scanning…</p></div>
+</section>
+
 <script>
 const $ = (id) => document.getElementById(id);
 
@@ -52,14 +79,23 @@ async function post(path, body){
   const r = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
   return r.json();
 }
+function escapeHtml(s){ return (s||'').replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function ago(iso){ if(!iso) return '—'; const d=(Date.now()-new Date(iso).getTime())/1000; if(d<60) return Math.round(d)+'s ago'; if(d<3600) return Math.round(d/60)+'m ago'; if(d<86400) return Math.round(d/3600)+'h ago'; return Math.round(d/86400)+'d ago'; }
+function base(p){ return (p||'').split('/').filter(Boolean).pop() || p || ''; }
+function keyLink(s){
+  if(!s.linear_key) return '';
+  const inner = s.linear_url ? `<a href="${s.linear_url}" target="_blank">${s.linear_key}</a>` : s.linear_key;
+  return ` · <span class="linkmatch">${inner}</span>`;
+}
 
 function issueCard(i){
   const prId = i.pr_url ? (i.pr_url.match(/pull-requests\/(\d+)/)||[])[1] : '';
   const canRun = i.state_name === 'Ready for AI';
   const canReview = i.state_name === 'PR Open' || i.state_name === 'AI Review';
   const canFix = i.state_name === 'Needs Fixes';
+  const idLink = i.url ? `<a href="${i.url}" target="_blank">${i.identifier}</a>` : i.identifier;
   return `<div class="card">
-    <div class="row"><span class="key">${i.identifier} — ${escapeHtml(i.title)}</span>
+    <div class="row"><span class="key">${idLink} — ${escapeHtml(i.title)}</span>
       <span class="state">${i.state_name||'—'}</span></div>
     <div class="meta">size:${i.size||'—'} · risk:${i.risk||'—'} · repo:${i.repo||'—'}${i.pr_url?` · <a href="${i.pr_url}" target="_blank">PR</a>`:''}</div>
     <div class="actions">
@@ -71,15 +107,55 @@ function issueCard(i){
 }
 
 function runCard(r){
+  const sid = r.session_id ? ` · session <code>${r.session_id.slice(0,8)}</code>` : '';
   return `<div class="card" onclick="showLog('${r.id}')" style="cursor:pointer">
     <div class="row"><span class="key">${r.kind} · ${r.issue_key}</span>
       <span class="status-${r.status}">${r.status}</span></div>
-    <div class="meta">${r.agent||''}${r.pr_url?` · <a href="${r.pr_url}" target="_blank">PR</a>`:''} · <code>${r.id}</code></div>
+    <div class="meta">${r.agent||''}${r.pr_url?` · <a href="${r.pr_url}" target="_blank">PR</a>`:''}${sid} · <code>${r.id}</code></div>
     <pre id="log-${r.id}" style="display:none">…</pre>
   </div>`;
 }
 
-function escapeHtml(s){ return (s||'').replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+function attentionCard(s){
+  const tag = s.attention === 'waiting_approval' ? 'awaiting tool approval' : 'awaiting your answer';
+  const link = keyLink(s);
+  const qs = (s.questions && s.questions.length)
+    ? `<ul class="qs">${s.questions.map(q=>`<li>${escapeHtml(q)}</li>`).join('')}</ul>` : '';
+  const managed = s.app_managed ? ' · app-managed' : '';
+  return `<div class="att-card">
+    <div class="row"><span class="key">${escapeHtml(s.title)}</span><span class="att-tag">${tag}</span></div>
+    <div class="meta">${escapeHtml(base(s.cwd))}${s.git_branch?` · ${escapeHtml(s.git_branch)}`:''}${link}${managed} · ${ago(s.last_active)} · <code>${s.session_id.slice(0,8)}</code></div>
+    ${qs}
+    <textarea id="ans-${s.session_id}" placeholder="Type your answer / decision, then Answer & resume…"></textarea>
+    <div class="actions">
+      <button onclick="answerResume('${s.session_id}', ${JSON.stringify(s.cwd||'')})">Answer &amp; resume</button>
+      <button onclick="copyResume('${s.session_id}')">Copy resume cmd</button>
+    </div>
+  </div>`;
+}
+
+function prCard(p){
+  const key = p.linear_key
+    ? ` · <span class="linkmatch">${p.linear_url?`<a href="${p.linear_url}" target="_blank">${p.linear_key}</a>`:p.linear_key}</span>` : '';
+  const tag = p.is_review ? '<span class="state">review</span>' : '<span class="state">open</span>';
+  const jsKey = p.linear_key ? `'${p.linear_key}'` : 'null';
+  return `<div class="card">
+    <div class="row"><span class="key"><a href="${p.url}" target="_blank">#${p.pr_id}</a> — ${escapeHtml(p.title)}</span>${tag}</div>
+    <div class="meta">${escapeHtml(p.source_branch)} → ${escapeHtml(p.destination_branch)}${p.author?` · ${escapeHtml(p.author)}`:''}${key}${p.draft?' · draft':''}</div>
+    <div class="actions">
+      <button onclick="dispatchPr('review', ${p.pr_id}, '${p.repo}', ${jsKey})">Review</button>
+      <button onclick="dispatchPr('fix', ${p.pr_id}, '${p.repo}', ${jsKey})">Fix</button>
+    </div>
+  </div>`;
+}
+
+function sessionCard(s){
+  const link = keyLink(s);
+  return `<div class="card">
+    <div class="row"><span class="key">${escapeHtml(s.title)}</span><span class="sess-tag ${s.attention}">${s.attention}</span></div>
+    <div class="meta">${escapeHtml(base(s.cwd))}${s.git_branch?` · ${escapeHtml(s.git_branch)}`:''}${link}${s.app_managed?' · app-managed':''} · ${ago(s.last_active)} · <code>${s.session_id.slice(0,8)}</code></div>
+  </div>`;
+}
 
 async function refresh(){
   const h = await (await fetch('/health')).json();
@@ -94,6 +170,18 @@ async function refresh(){
 
   const rr = await (await fetch('/api/runs')).json();
   $('runs').innerHTML = (rr.runs && rr.runs.length) ? rr.runs.slice().reverse().map(runCard).join('') : '<p class="empty">No runs yet.</p>';
+
+  const pr = await (await fetch('/api/prs')).json();
+  $('prs').innerHTML = (pr.prs && pr.prs.length)
+    ? pr.prs.map(prCard).join('')
+    : `<p class="empty">${pr.note || 'No open PRs.'}</p>`;
+
+  const ss = await (await fetch('/api/sessions')).json();
+  const list = ss.sessions || [];
+  const att = list.filter(s => s.attention === 'waiting_input' || s.attention === 'waiting_approval');
+  $('attention-wrap').style.display = att.length ? 'block' : 'none';
+  $('attention').innerHTML = att.map(attentionCard).join('');
+  $('sessions').innerHTML = list.length ? list.map(sessionCard).join('') : '<p class="empty">No Claude sessions found.</p>';
 }
 
 async function dispatch(kind, issueKey, prId){
@@ -101,6 +189,26 @@ async function dispatch(kind, issueKey, prId){
   const res = await post('/api/dispatch/'+kind, body);
   await refresh();
   if(res.run_id) showLog(res.run_id);
+}
+
+async function dispatchPr(kind, prId, repo, issueKey){
+  const res = await post('/api/dispatch/'+kind, {issue_key:issueKey, pr_id:prId, repo});
+  await refresh();
+  if(res.run_id) showLog(res.run_id);
+}
+
+async function answerResume(sessionId, cwd){
+  const ta = $('ans-'+sessionId);
+  const answer = ta ? ta.value.trim() : '';
+  if(!answer){ ta && ta.focus(); return; }
+  const res = await post('/api/sessions/resume', {session_id:sessionId, answer, cwd});
+  await refresh();
+  if(res.run_id) showLog(res.run_id);
+}
+
+async function copyResume(sessionId){
+  const cmd = 'claude --resume '+sessionId;
+  try { await navigator.clipboard.writeText(cmd); } catch(e){}
 }
 
 async function showLog(id){

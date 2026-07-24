@@ -85,9 +85,30 @@ hardcoded.
 | GET | `/api/runs`, `/api/runs/{id}` | live + recent runs, log tail |
 | POST | `/api/dispatch/issue` | implement an issue |
 | POST | `/api/dispatch/review` | review a PR (`MODEL_REVIEW`) |
-| POST | `/api/dispatch/fix` | fix PR comments (original author) |
+| POST | `/api/dispatch/fix` | fix PR comments (original author, **resumes its session**) |
+| POST | `/api/dispatch/answer` | answer a paused issue and resume its session |
+| GET | `/api/sessions` | Claude sessions on this machine + attention state |
+| POST | `/api/sessions/resume` | resume a session (with an answer, or return the `claude --resume` cmd) |
 
 No inbound webhooks → no signature-validation surface.
+
+## Session management & attention radar
+
+Implementation runs **pin a Claude session** (`claude --session-id <uuid>`, claude
+CLI only) and record it in the run and the PR meta-block. On **Fix** the original
+session is **resumed** (`claude --resume`) so the fix keeps full authoring context
+instead of starting cold. Write-enabled prompts carry an **escalation contract**:
+an agent that can't proceed emits `{"status":"needs_input","questions":[...]}`
+(parsed by `escalation_parser`), which surfaces the question instead of failing as
+"no commits".
+
+The status page also has a **"⚠ Needs your attention"** panel driven by a radar
+that scans `~/.claude/projects/*/*.jsonl` for **any** Claude session (not just
+app-run ones) that looks parked on you — a tool call awaiting approval, or an
+assistant message that ends in a question — matched to a Linear issue / branch
+where possible. Detection is heuristic and advisory; it never mutates a session.
+Tuning: `SESSION_IDLE_SECONDS`, `SESSION_WAITING_MAX_AGE_SECONDS`. Resume is
+**claude-only** (codex has a separate session model).
 
 ## Testing with DRY_RUN
 

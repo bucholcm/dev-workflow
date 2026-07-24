@@ -12,6 +12,7 @@ import uuid
 
 from . import gitops, prompts, runner
 from .config import Settings
+from .escalation_parser import parse_escalation
 from .models import Decision, LinearIssue, ReviewResult, Severity, WorkflowState
 from .pr_meta import PRMeta, build_pr_description, parse_meta
 from .review_parser import parse_review_output
@@ -68,7 +69,14 @@ class Orchestrator:
         if self.runs.active_for_issue(issue.identifier):
             self.runs.event(run_id, "guard", f"{issue.identifier} already has an active run; skipping")
         decision = route(issue, self.s)
-        self.runs.start(run_id, "implement", issue.identifier, agent=decision.agent or "human")
+        # Pin a Claude session up front so the fix/answer turn can resume it later.
+        # Session pinning is claude-only; codex work runs unpinned (no resume support).
+        intended_family = self._cli_family(decision.agent) if decision.agent else ""
+        session_id = str(uuid.uuid4()) if intended_family == "claude" else ""
+        self.runs.start(
+            run_id, "implement", issue.identifier,
+            agent=decision.agent or "human", session_id=session_id, cli=intended_family,
+        )
         self.runs.event(run_id, "route", decision.reason)
 
         # Validate required fields (design §3.2).
@@ -88,7 +96,9 @@ class Orchestrator:
         self._set_state(run_id, issue, WorkflowState.AI_IN_PROGRESS)
 
         if self.s.dry_run:
-            self.runs.event(run_id, "implement", f"[dry-run] would run {decision.agent} on branch {decision.branch}")
+            pin = f" (session {session_id[:8]}…)" if session_id else " (unpinned)"
+            msg = f"[dry-run] would run {decision.agent} on branch {decision.branch}{pin}"
+            self.runs.event(run_id, "implement", msg)
             self.runs.event(run_id, "pr", "[dry-run] would create PR with meta-block")
             self.runs.finish(run_id, "dry_run")
             return run_id
@@ -97,19 +107,25 @@ class Orchestrator:
         try:
             fallback = self.s.codex_fallback_to_claude
             cli = runner.resolve_cli(self._cli_family(decision.agent), allow_claude_fallback=fallback)
+            # Only a claude run can carry the pinned session; a codex fallback runs unpinned.
+            run_session = session_id if cli == "claude" else ""
             wt = gitops.prepare_worktree(self.s.target_repo_path, decision.branch)
             is_complex = decision.agent == self.s.model_complex_implementation
             prompt = prompts.build_implement_prompt(issue, is_complex=is_complex)
             self.runs.event(run_id, "implement", f"running {cli} ({decision.agent})")
-            runner.run_agent(
+            raw = runner.run_agent(
                 cli=cli, prompt=prompt, cwd=wt, model=None, read_only=False,
                 timeout=self.s.agent_timeout_seconds,
                 on_event=lambda p, m: self.runs.event(run_id, p, m),
+                session_id=run_session or None,
             )
+            # The agent may STOP and ask for a human decision instead of coding.
+            if self._handle_escalation(run_id, issue, raw):
+                return run_id
             if not gitops.has_commits(wt):
                 raise RuntimeError("agent produced no commits")
             gitops.push_branch(wt, decision.branch)
-            pr = self._open_pr(run_id, issue, decision)
+            pr = self._open_pr(run_id, issue, decision, session_id=run_session, cli=cli)
             self._set_state(run_id, issue, WorkflowState.PR_OPEN)
             self.runs.finish(run_id, "passed", pr_url=pr.url)
         except Exception as e:  # noqa: BLE001 — any failure escalates to human review
@@ -119,7 +135,22 @@ class Orchestrator:
             self.runs.finish(run_id, "failed")
         return run_id
 
-    def _open_pr(self, run_id: str, issue: LinearIssue, decision):
+    def _handle_escalation(self, run_id: str, issue: LinearIssue | None, raw: str) -> bool:
+        """If the agent asked for human input, record it and stop. Returns True when escalated."""
+        esc = parse_escalation(raw)
+        if esc.get("status") != "needs_input":
+            return False
+        questions = esc.get("questions") or []
+        self.runs.set_questions(run_id, questions)
+        pretty = "\n".join(f"- {q}" for q in questions) or "- (no specific questions provided)"
+        if issue:
+            self._comment(run_id, issue, f"AI needs human input before continuing:\n\n{pretty}")
+            self._set_state(run_id, issue, WorkflowState.HUMAN_REVIEW)
+        self.runs.event(run_id, "needs_input", f"{len(questions)} question(s) awaiting the human")
+        self.runs.finish(run_id, "needs_input")
+        return True
+
+    def _open_pr(self, run_id: str, issue: LinearIssue, decision, *, session_id: str = "", cli: str = ""):
         bb = self._make_bb(issue.repo)
         meta = PRMeta(
             linear_issue=issue.identifier,
@@ -128,6 +159,8 @@ class Orchestrator:
             ai_reviewer=decision.reviewer,
             ai_complexity=str(issue.size or ""),
             ai_risk=str(issue.risk or ""),
+            ai_session_id=session_id,
+            ai_cli=cli,
         )
         criteria = [ln for ln in (issue.description or "").splitlines() if ln.strip().startswith("-")]
         body = build_pr_description(meta=meta, summary=issue.title, acceptance_criteria=criteria)
@@ -219,12 +252,19 @@ class Orchestrator:
             wt = gitops.worktree_for(self.s.target_repo_path, pr.source_branch)
             fallback = self.s.codex_fallback_to_claude
             cli = runner.resolve_cli(self._cli_family(meta.ai_author), allow_claude_fallback=fallback)
-            self.runs.event(run_id, "fix", f"running original author {meta.ai_author} ({cli})")
-            runner.run_agent(
+            # Resume the ORIGINAL session so the fix keeps full authoring context
+            # (claude-only; codex meta or an absent id falls back to a cold prompt).
+            resume = bool(meta.ai_session_id) and cli == "claude" and meta.ai_cli == "claude"
+            how = f"resuming session {meta.ai_session_id[:8]}…" if resume else "cold prompt (no resumable session)"
+            self.runs.event(run_id, "fix", f"running original author {meta.ai_author} ({cli}) — {how}")
+            raw = runner.run_agent(
                 cli=cli, prompt=prompts.build_fix_prompt(issue, unresolved), cwd=wt, read_only=False,
                 timeout=self.s.agent_timeout_seconds,
                 on_event=lambda p, m: self.runs.event(run_id, p, m),
+                session_id=meta.ai_session_id or None, resume=resume,
             )
+            if self._handle_escalation(run_id, issue, raw):
+                return run_id
             gitops.push_branch(wt, pr.source_branch)
             bb.post_comment(pr_id, "Original author agent pushed fixes; re-review triggered.")
             if issue:
@@ -235,6 +275,83 @@ class Orchestrator:
             if issue:
                 self._comment(run_id, issue, f"AI fix failed: {e}. Escalating to human review.")
                 self._set_state(run_id, issue, WorkflowState.HUMAN_REVIEW)
+            self.runs.finish(run_id, "failed")
+        return run_id
+
+    # ── 4. answer (resume a paused session with the human's decision) ──
+    def dispatch_answer(self, issue: LinearIssue, answer: str) -> str:
+        """Resume the original Claude session, feeding the human's answer, then continue.
+
+        Targets a run that previously finished `needs_input`. Resume is claude-only;
+        if there is no resumable session we report that instead of silently guessing.
+        """
+        run_id = self._new_run_id()
+        prior = self.runs.latest_for_issue(issue.identifier)
+        session_id = prior.session_id if prior else ""
+        cli = prior.cli if prior else ""
+        self.runs.start(run_id, "resume", issue.identifier, agent=(prior.agent if prior else ""),
+                        session_id=session_id, cli=cli)
+
+        if not session_id or cli != "claude":
+            self.runs.event(run_id, "resume", "no resumable Claude session for this issue (codex or unpinned)")
+            self.runs.finish(run_id, "failed")
+            return run_id
+
+        if self.s.dry_run:
+            self.runs.event(run_id, "resume", f"[dry-run] would resume session {session_id[:8]}… with the answer")
+            self.runs.finish(run_id, "dry_run")
+            return run_id
+
+        try:
+            decision = route(issue, self.s)
+            wt = gitops.worktree_for(self.s.target_repo_path, decision.branch)
+            self.runs.event(run_id, "resume", f"resuming session {session_id[:8]}… ({decision.agent})")
+            raw = runner.run_agent(
+                cli="claude", prompt=prompts.build_answer_prompt(answer), cwd=wt, read_only=False,
+                timeout=self.s.agent_timeout_seconds,
+                on_event=lambda p, m: self.runs.event(run_id, p, m),
+                session_id=session_id, resume=True,
+            )
+            if self._handle_escalation(run_id, issue, raw):  # may pause again on a follow-up question
+                return run_id
+            if not gitops.has_commits(wt):
+                raise RuntimeError("agent answered but produced no commits")
+            gitops.push_branch(wt, decision.branch)
+            pr = self._open_pr(run_id, issue, decision, session_id=session_id, cli="claude")
+            self._set_state(run_id, issue, WorkflowState.PR_OPEN)
+            self.runs.finish(run_id, "passed", pr_url=pr.url)
+        except Exception as e:  # noqa: BLE001
+            logger.exception("answer/resume failed for %s", issue.identifier)
+            self._comment(run_id, issue, f"AI resume failed: {e}. Escalating to human review.")
+            self._set_state(run_id, issue, WorkflowState.HUMAN_REVIEW)
+            self.runs.finish(run_id, "failed")
+        return run_id
+
+    def resume_session(self, session_id: str, cwd: str, answer: str) -> str:
+        """Resume ANY Claude session (radar action) with the human's answer, headless.
+
+        Unlike dispatch_answer this is not tied to a Linear issue — it just continues
+        the session in its own working directory. Claude-only.
+        """
+        run_id = self._new_run_id()
+        self.runs.start(run_id, "resume", session_id[:12], session_id=session_id, cli="claude")
+        if self.s.dry_run:
+            self.runs.event(run_id, "resume", f"[dry-run] would resume session {session_id[:8]}… in {cwd}")
+            self.runs.finish(run_id, "dry_run")
+            return run_id
+        try:
+            self.runs.event(run_id, "resume", f"resuming session {session_id[:8]}… in {cwd}")
+            raw = runner.run_agent(
+                cli="claude", prompt=prompts.build_answer_prompt(answer), cwd=cwd, read_only=False,
+                timeout=self.s.agent_timeout_seconds,
+                on_event=lambda p, m: self.runs.event(run_id, p, m),
+                session_id=session_id, resume=True,
+            )
+            if not self._handle_escalation(run_id, None, raw):
+                self.runs.finish(run_id, "passed")
+        except Exception as e:  # noqa: BLE001
+            logger.exception("resume_session failed for %s", session_id)
+            self.runs.event(run_id, "resume", f"failed: {e}")
             self.runs.finish(run_id, "failed")
         return run_id
 

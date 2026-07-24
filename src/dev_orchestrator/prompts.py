@@ -9,6 +9,17 @@ from __future__ import annotations
 
 from .models import LinearIssue
 
+# Appended to write-enabled (implement / fix / answer) prompts. Lets the agent
+# STOP and ask for a human decision in a machine-readable way instead of guessing;
+# parsed by escalation_parser. A missing block is treated as "done".
+_ESCALATION_CONTRACT = """
+## Signalling completion or a blocker — MANDATORY
+End your response with EXACTLY ONE fenced ```json block:
+- Finished the work (committed): {"status": "done"}
+- Cannot proceed without a human decision (risky/ambiguous/blocked): \
+{"status": "needs_input", "questions": ["specific question 1", "..."], "context": "one line of context"}
+Do not guess when blocked — emit needs_input and stop."""
+
 _REVIEW_JSON_SCHEMA = """{
   "overview": "one-paragraph summary of the change",
   "findings": [
@@ -47,6 +58,7 @@ This is a {role} change. Follow the repository's AGENTS.md / CLAUDE.md conventio
 - Commit your work on the current branch with a clear message referencing {issue.identifier}.
 - If the change is risky (auth, permissions, migrations, data deletion) or the
   requirement is unclear, STOP and explain what needs human input instead of guessing.
+{_ESCALATION_CONTRACT}
 """
 
 
@@ -88,4 +100,17 @@ def build_fix_prompt(issue: LinearIssue | None, unresolved: str) -> str:
 - Make the SMALLEST possible fix for each comment. Do not do unrelated cleanup.
 - Push commits to the same PR branch.
 - After fixing, write one short summary line per comment describing what you changed.
+{_ESCALATION_CONTRACT}
+"""
+
+
+def build_answer_prompt(answer: str) -> str:
+    """Continuation turn: feed the human's answer back into a resumed session."""
+    return f"""The human has answered the question(s) you raised. Here is their decision:
+
+{answer}
+
+Proceed with the implementation using this guidance. Follow all earlier rules
+(smallest safe change, commit referencing the issue, add/update tests).
+{_ESCALATION_CONTRACT}
 """

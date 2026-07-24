@@ -42,7 +42,7 @@ mutation Comment($issueId: String!, $body: String!) {
 """
 
 _STATES_QUERY = """
-query States($teamId: String!) {
+query States($teamId: ID!) {
   workflowStates(filter: { team: { id: { eq: $teamId } } }, first: 100) {
     nodes { id name }
   }
@@ -114,6 +114,10 @@ class LinearClient:
             filt["team"] = {"id": {"eq": self.team_id}}
         nodes = self._gql(_ISSUES_QUERY, {"filter": filt})["issues"]["nodes"]
         return [_to_issue(n) for n in nodes]
+
+    def workspace_url_key(self) -> str:
+        """Org slug used in issue URLs, e.g. 'bridge-soi' → https://linear.app/bridge-soi/issue/BRI-1."""
+        return self._gql("{ organization { urlKey } }", {})["organization"]["urlKey"]
 
     def get_state_ids(self) -> dict[str, str]:
         """Map workflow-state name → id for this team (used to set state)."""
