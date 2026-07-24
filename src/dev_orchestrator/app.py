@@ -239,14 +239,22 @@ def create_app() -> FastAPI:
             target_repo_path=s.target_repo_path,
             app_session_ids=_app_session_ids(),
         )
-        # Enrich app-managed sessions with the run's parsed questions (needs_input).
-        q_by_sid = {r.session_id: r.questions for r in runs.list() if r.session_id and r.questions}
+        # Cross-reference run history: the orchestrator pinned each session to an
+        # issue, so that mapping is authoritative — use it over the branch heuristic.
+        all_runs = runs.list()
+        q_by_sid = {r.session_id: r.questions for r in all_runs if r.session_id and r.questions}
+        key_by_sid = {r.session_id: r.issue_key for r in all_runs
+                      if r.session_id and r.issue_key and not r.issue_key.startswith("PR-")}
         dismissed = session_radar.load_dismissed(_dismiss_path)
         out = []
         for si in found:
             d = asdict(si)
+            key = key_by_sid.get(si.session_id) or si.linear_key   # run history wins
+            d["linear_key"] = key
+            d["linear_url"] = _linear_url(key)
+            if key and d["title"] in ("", "(untitled session)"):
+                d["title"] = f"{key} (session)"                    # better than "untitled"
             d["questions"] = q_by_sid.get(si.session_id, [])
-            d["linear_url"] = _linear_url(si.linear_key)
             d["dismissed"] = session_radar.is_dismissed(dismissed, si.session_id, si.last_active)
             out.append(d)
         return {"sessions": out}
